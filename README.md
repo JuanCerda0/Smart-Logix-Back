@@ -51,9 +51,11 @@ El proyecto considera abordar:
 Backend implementado con:
 
 - Backend For Frontend en `BackendForFrontend`
+- Microservicio de autenticacion en `auth-service`
 - Microservicio de inventario en `inventory-service`
-- PostgreSQL como base de datos local mediante Docker Compose
+- PostgreSQL separado para autenticacion e inventario mediante Docker Compose
 - H2 solo para tests automatizados del microservicio de inventario
+- Rutas tenant-aware bajo `/{tenant}/api/...`
 
 ---
 
@@ -67,7 +69,9 @@ docker compose up --build
 
 Esto levanta:
 
-- PostgreSQL en `localhost:5432`
+- PostgreSQL de inventario en `localhost:5432`
+- PostgreSQL de autenticacion en `localhost:5433`
+- `auth-service` en `http://localhost:8082`
 - `inventory-service` en `http://localhost:8081`
 - `BackendForFrontend` en `http://localhost:8080`
 
@@ -78,3 +82,21 @@ http://localhost:8080
 ```
 
 No debe consumir directamente `inventory-service`.
+
+## Flujo Actual
+
+El frontend consume solo el BFF usando el tenant en el path:
+
+```text
+http://localhost:8080/empresa1/api
+```
+
+El BFF resuelve `{tenant}`, lo envia a `auth-service` como `X-Tenant-Id` para login y registro, y valida que los JWT usados en productos tengan un claim `tenant` que coincida con el tenant del path. Para productos, el BFF reenvia `Authorization` y `X-Tenant-Id` a `inventory-service`.
+
+Endpoints principales:
+
+```http
+POST /{tenant}/api/auth/register
+POST /{tenant}/api/auth/login
+GET  /{tenant}/api/products
+```
