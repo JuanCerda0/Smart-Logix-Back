@@ -20,6 +20,11 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.UNAUTHORIZED, exception.getMessage(), request, Map.of());
     }
 
+    @ExceptionHandler(ForbiddenException.class)
+    ResponseEntity<ApiError> handleForbidden(ForbiddenException exception, HttpServletRequest request) {
+        return buildError(HttpStatus.FORBIDDEN, exception.getMessage(), request, Map.of());
+    }
+
     @ExceptionHandler(UnsupportedOperationException.class)
     ResponseEntity<ApiError> handleUnsupported(UnsupportedOperationException exception, HttpServletRequest request) {
         return buildError(HttpStatus.NOT_IMPLEMENTED, exception.getMessage(), request, Map.of());

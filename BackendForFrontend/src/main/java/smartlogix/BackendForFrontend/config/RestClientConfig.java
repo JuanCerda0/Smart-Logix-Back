@@ -19,4 +19,11 @@ public class RestClientConfig {
                 .baseUrl(inventoryUrl)
                 .build();
     }
+
+    @Bean
+    RestClient authRestClient(RestClient.Builder builder, @Value("${smartlogix.services.auth-url}") String authUrl) {
+        return builder
+                .baseUrl(authUrl)
+                .build();
+    }
 }

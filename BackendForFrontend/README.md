@@ -5,8 +5,10 @@ Spring Boot BFF used as the public backend entry point for the Svelte frontend.
 ## Responsibilities
 
 - Expose frontend-friendly endpoints under `/api`.
-- Generate JWT tokens from a basic login endpoint.
+- Resolve the tenant from `/{tenant}/api/...`.
+- Delegate register and login requests to `auth-service`.
 - Validate JWT tokens on protected endpoints.
+- Reject product requests when the JWT `tenant` claim does not match the path tenant.
 - Forward product requests to `inventory-service`.
 - Hide internal microservice URLs from the frontend.
 
@@ -37,20 +39,31 @@ SMARTLOGIX_AUTH_USERNAME=admin
 SMARTLOGIX_AUTH_PASSWORD=admin123
 SMARTLOGIX_JWT_SECRET=smartlogix-development-secret-key-change-me-2026
 SMARTLOGIX_JWT_EXPIRATION_SECONDS=3600
+AUTH_SERVICE_URL=http://localhost:8082
 INVENTORY_SERVICE_URL=http://localhost:8081
 ```
 
-The JWT secret must match the value configured in `inventory-service`.
+The JWT secret must match the value configured in `auth-service` and `inventory-service`.
 
-## Login
+## Auth API
 
 ```http
-POST /api/auth/login
+POST /empresa1/api/auth/register
 Content-Type: application/json
 
 {
-  "username": "admin",
-  "password": "admin123"
+  "username": "demo",
+  "password": "demo123"
+}
+```
+
+```http
+POST /empresa1/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "demo",
+  "password": "demo123"
 }
 ```
 
@@ -60,9 +73,12 @@ Response:
 {
   "token": "<jwt>",
   "tokenType": "Bearer",
-  "expiresIn": 3600
+  "expiresIn": 3600,
+  "tenant": "empresa1"
 }
 ```
+
+The BFF sends the tenant to `auth-service` using `X-Tenant-Id`.
 
 ## Product API
 
@@ -75,15 +91,15 @@ Authorization: Bearer <jwt>
 Available endpoints:
 
 ```http
-GET    /api/products
-GET    /api/products/{id}
-POST   /api/products
-PUT    /api/products/{id}
-PATCH  /api/products/{id}/stock
-DELETE /api/products/{id}
+GET    /empresa1/api/products
+GET    /empresa1/api/products/{id}
+POST   /empresa1/api/products
+PUT    /empresa1/api/products/{id}
+PATCH  /empresa1/api/products/{id}/stock
+DELETE /empresa1/api/products/{id}
 ```
 
-The BFF forwards these calls to `inventory-service` using the same JWT.
+The BFF checks that the token claim `tenant` matches `empresa1` from the path, then forwards these calls to `inventory-service` with `Authorization` and `X-Tenant-Id`.
 
 ## Docker
 
@@ -107,9 +123,8 @@ Run the container:
 
 ```bash
 docker run --rm -p 8080:8080 \
-  -e SMARTLOGIX_AUTH_USERNAME=admin \
-  -e SMARTLOGIX_AUTH_PASSWORD=admin123 \
   -e SMARTLOGIX_JWT_SECRET=smartlogix-development-secret-key-change-me-2026 \
+  -e AUTH_SERVICE_URL=http://host.docker.internal:8082 \
   -e INVENTORY_SERVICE_URL=http://host.docker.internal:8081 \
   smartlogix-bff
 ```
