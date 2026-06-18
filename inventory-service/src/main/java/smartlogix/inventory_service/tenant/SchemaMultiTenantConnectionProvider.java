@@ -32,14 +32,22 @@ public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectio
     @Override
     public Connection getConnection(String tenantIdentifier) throws SQLException {
         Connection connection = getAnyConnection();
-        connection.setSchema(tenantIdentifier);
+        try (var statement = connection.createStatement()) {
+            statement.execute("SET search_path TO " + tenantIdentifier);
+        } catch (SQLException e) {
+            connection.close();
+            throw e;
+        }
         return connection;
     }
 
     @Override
     public void releaseConnection(String tenantIdentifier, Connection connection) throws SQLException {
-        connection.setSchema(tenantProperties.getDefaultTenant());
-        releaseAnyConnection(connection);
+        try (var statement = connection.createStatement()) {
+            statement.execute("SET search_path TO " + tenantProperties.getDefaultTenant());
+        } finally {
+            releaseAnyConnection(connection);
+        }
     }
 
     @Override
