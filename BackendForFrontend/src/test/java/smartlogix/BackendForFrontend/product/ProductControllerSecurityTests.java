@@ -11,6 +11,8 @@ import smartlogix.BackendForFrontend.auth.JwtTokenService;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -30,17 +32,28 @@ class ProductControllerSecurityTests {
 
     @Test
     void shouldRejectProductsWithoutJwt() throws Exception {
-        mockMvc.perform(get("/api/products"))
+        mockMvc.perform(get("/empresa1/api/products"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
-    void shouldAllowProductsWithJwt() throws Exception {
-        when(inventoryClient.findAll(anyString())).thenReturn(List.of());
-        String token = jwtTokenService.generateToken("admin").token();
+    void shouldAllowProductsWithMatchingTenantJwt() throws Exception {
+        when(inventoryClient.findAll(anyString(), anyString())).thenReturn(List.of());
+        String token = jwtTokenService.generateToken("admin", "empresa1").token();
 
-        mockMvc.perform(get("/api/products")
+        mockMvc.perform(get("/empresa1/api/products")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
+
+        verify(inventoryClient).findAll(eq("empresa1"), eq("Bearer " + token));
+    }
+
+    @Test
+    void shouldRejectProductsWhenPathTenantDoesNotMatchJwtTenant() throws Exception {
+        String token = jwtTokenService.generateToken("admin", "empresa1").token();
+
+        mockMvc.perform(get("/empresa2/api/products")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
     }
 }

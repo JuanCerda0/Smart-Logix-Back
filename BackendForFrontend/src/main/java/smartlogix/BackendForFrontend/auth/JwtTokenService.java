@@ -29,6 +29,10 @@ public class JwtTokenService {
     }
 
     public TokenData generateToken(String subject) {
+        return generateToken(subject, "empresa1");
+    }
+
+    public TokenData generateToken(String subject, String tenant) {
         Instant now = Instant.now();
         Instant expiresAt = now.plusSeconds(expirationSeconds);
 
@@ -37,6 +41,7 @@ public class JwtTokenService {
                 .subject(subject)
                 .issuedAt(now)
                 .expiresAt(expiresAt)
+                .claim("tenant", tenant)
                 .claim("scope", "products:read products:write")
                 .build();
 

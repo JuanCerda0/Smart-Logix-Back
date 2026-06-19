@@ -1,464 +1,274 @@
-# Guia de Integracion Frontend - SmartLogix BFF
+# Guía de Integración — Frontend (Svelte) ↔ BFF SmartLogix
 
-Este documento explica como el frontend debe comunicarse con el Backend For Frontend (BFF) y como funciona el flujo backend por detras.
+Esta guía es para conectar el frontend al backend. Está basada en pruebas
+reales ya ejecutadas contra el BFF (ver scripts de prueba), así que los
+ejemplos de aquí están confirmados funcionando.
 
-El frontend debe comunicarse solo con el BFF. No debe llamar directamente a `inventory-service`.
+## 1. URL base y arranque
 
-```text
-Frontend Svelte
-  -> BackendForFrontend
-  -> inventory-service
+El BFF corre en:
+
 ```
-
-## URLs Locales
-
-Servicios locales por defecto:
-
-```text
-BFF:               http://localhost:8080
-Inventory service: http://localhost:8081
-Frontend:          http://localhost:5173
-PostgreSQL:        localhost:5432
-```
-
-El frontend debe usar solo esta URL base:
-
-```text
 http://localhost:8080
 ```
 
-## Como Levantar El Backend Para Integrar Frontend
-
-Opcion recomendada: levantar todo el backend desde la raiz del repositorio backend:
+Antes de programar nada, levanta el backend completo con:
 
 ```bash
-cd Smart-Logix-Back
 docker compose up --build
 ```
 
-Este comando levanta:
+Y confirma que responde (deberías ver la UI de Swagger):
 
-```text
-PostgreSQL        localhost:5432
-inventory-service http://localhost:8081
-BackendForFrontend http://localhost:8080
+```
+http://localhost:8080/swagger-ui.html
 ```
 
-Para el frontend, lo importante es que el BFF quede disponible en:
+## 2. ⚠️ Lo primero que hay que resolver: CORS
 
-```text
-http://localhost:8080
+El frontend (Vite/Svelte) corre típicamente en `http://localhost:5173` (o el
+puerto que asigne Vite), que es un **origen distinto** al del BFF
+(`localhost:8080`). Los navegadores bloquean estas peticiones por defecto a
+menos que el backend declare explícitamente que las acepta.
+
+**Antes de programar el primer fetch**, confirma con quien lleva el backend
+si `SecurityConfig` del BFF ya tiene un bean `CorsConfigurationSource` o
+`@CrossOrigin` habilitado para el origen de Vite. Si no está, el primer
+intento de login desde el navegador va a fallar en consola con un error de
+tipo:
+
+```
+Access to fetch at 'http://localhost:8080/...' from origin 'http://localhost:5173'
+has been blocked by CORS policy
 ```
 
-Los productos se guardan en PostgreSQL, por lo que no se pierden al reiniciar los servicios. El volumen de Docker se llama `smartlogix-postgres-data`.
+Esto **no se ve con curl ni con Postman** porque esas herramientas no
+aplican política de origen — por eso las pruebas de backend pasaron 100%
+pero esto puede sorprender al primer intento real desde el navegador.
 
-Si el backend ya esta levantado, el frontend puede ejecutarse normalmente en su propio proyecto:
+## 3. Estructura de rutas — todo lleva el tenant en el path
 
-```bash
-npm run dev
+Todas las llamadas de negocio van prefijadas por el tenant:
+
+```
+http://localhost:8080/{tenant}/api/...
 ```
 
-## Flujo De Autenticacion
+Donde `{tenant}` es el identificador de la empresa logueada, por ejemplo
+`empresa1` o `empresa2`. El frontend necesita **guardar el tenant** (lo
+recibe en la respuesta de login) y usarlo en cada llamada posterior.
 
-### 1. Login
+## 4. Flujo de autenticación
 
-El frontend envia las credenciales al BFF:
+### 4.1. Login
 
 ```http
-POST /api/auth/login
+POST http://localhost:8080/{tenant}/api/auth/login
 Content-Type: application/json
-```
 
-Body:
-
-```json
 {
   "username": "admin",
   "password": "admin123"
 }
 ```
 
-Respuesta exitosa:
+**Respuesta exitosa (200):**
 
 ```json
 {
-  "token": "jwt-token-aqui",
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
   "tokenType": "Bearer",
-  "expiresIn": 3600
+  "expiresIn": 3600,
+  "tenant": "empresa1"
 }
 ```
 
-El frontend debe guardar el valor de `token` y enviarlo en las siguientes solicitudes.
+**Qué debe hacer el frontend con esto:**
+1. Guardar el `token` (en memoria/store de Svelte; **no usar localStorage**
+   en producción sin evaluar el riesgo de XSS, pero para el alcance de este
+   proyecto puede ser aceptable).
+2. Guardar también el `tenant` recibido — se necesita para construir cada
+   URL siguiente.
+3. El token expira en `expiresIn` segundos (3600 = 1 hora). No hay endpoint
+   de refresh documentado por ahora; al expirar, el usuario deberá loguearse
+   de nuevo.
 
-Para esta entrega, se puede guardar en `localStorage`:
+**Login fallido (401):**
 
-```ts
-localStorage.setItem('smartlogix_token', data.token);
+```json
+{
+  "status": 401,
+  "error": "Unauthorized",
+  "message": "Invalid username or password",
+  "path": "/auth/login",
+  "validationErrors": {}
+}
 ```
 
-### 2. Solicitudes Autenticadas
-
-Todas las solicitudes protegidas deben enviar el token asi:
+### 4.2. Registro (si el frontend lo necesita)
 
 ```http
+POST http://localhost:8080/{tenant}/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "nuevo_usuario",
+  "password": "clave123"
+}
+```
+
+Respuesta exitosa: **201 Created**.
+Si el username ya existe en ese tenant: **409 Conflict**.
+
+## 5. Llamadas autenticadas — Productos
+
+Todas las rutas de productos requieren el header `Authorization` con el
+token obtenido en el login:
+
+```
 Authorization: Bearer <token>
 ```
 
-Ejemplo:
+**El frontend NO necesita enviar `X-Tenant-Id` manualmente** — ese header lo
+agrega el BFF internamente al hablar con Inventory Service. El frontend solo
+necesita el tenant en el **path** de la URL.
 
-```ts
-const token = localStorage.getItem('smartlogix_token');
-
-const response = await fetch('http://localhost:8080/api/products', {
-  headers: {
-    Authorization: `Bearer ${token}`
-  }
-});
-```
-
-## Ejemplos Para El Frontend
-
-### Login
-
-```ts
-export async function login(username: string, password: string) {
-  const response = await fetch('http://localhost:8080/api/auth/login', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ username, password })
-  });
-
-  if (!response.ok) {
-    throw new Error('Credenciales invalidas');
-  }
-
-  const data = await response.json();
-  localStorage.setItem('smartlogix_token', data.token);
-  return data;
-}
-```
-
-### Helper Para Headers
-
-```ts
-function authHeaders() {
-  const token = localStorage.getItem('smartlogix_token');
-
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`
-  };
-}
-```
-
-### Listar Productos
-
-```ts
-export async function getProducts() {
-  const response = await fetch('http://localhost:8080/api/products', {
-    headers: authHeaders()
-  });
-
-  if (!response.ok) {
-    throw new Error('No se pudieron cargar los productos');
-  }
-
-  return response.json();
-}
-```
-
-### Crear Producto
-
-```ts
-export async function createProduct(product: {
-  sku: string;
-  name: string;
-  description?: string;
-  category: string;
-  unitPrice: number;
-  stock: number;
-}) {
-  const response = await fetch('http://localhost:8080/api/products', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(product)
-  });
-
-  if (!response.ok) {
-    throw new Error('No se pudo crear el producto');
-  }
-
-  return response.json();
-}
-```
-
-### Actualizar Producto
-
-```ts
-export async function updateProduct(id: number, product: {
-  sku: string;
-  name: string;
-  description?: string;
-  category: string;
-  unitPrice: number;
-  stock: number;
-}) {
-  const response = await fetch(`http://localhost:8080/api/products/${id}`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify(product)
-  });
-
-  if (!response.ok) {
-    throw new Error('No se pudo actualizar el producto');
-  }
-
-  return response.json();
-}
-```
-
-### Actualizar Stock
-
-```ts
-export async function updateStock(id: number, stock: number) {
-  const response = await fetch(`http://localhost:8080/api/products/${id}/stock`, {
-    method: 'PATCH',
-    headers: authHeaders(),
-    body: JSON.stringify({ stock })
-  });
-
-  if (!response.ok) {
-    throw new Error('No se pudo actualizar el stock');
-  }
-
-  return response.json();
-}
-```
-
-### Eliminar Producto
-
-```ts
-export async function deleteProduct(id: number) {
-  const response = await fetch(`http://localhost:8080/api/products/${id}`, {
-    method: 'DELETE',
-    headers: authHeaders()
-  });
-
-  if (!response.ok) {
-    throw new Error('No se pudo eliminar el producto');
-  }
-}
-```
-
-## Endpoints Disponibles Para El Frontend
-
-Todos estos endpoints pertenecen al BFF:
+### 5.1. Listar productos
 
 ```http
-POST   /api/auth/login
-GET    /api/products
-GET    /api/products/{id}
-POST   /api/products
-PUT    /api/products/{id}
-PATCH  /api/products/{id}/stock
-DELETE /api/products/{id}
+GET http://localhost:8080/{tenant}/api/products
+Authorization: Bearer <token>
 ```
 
-## Contrato De Producto
-
-### Request Para Crear O Actualizar Producto
-
-Se usa en:
-
-```http
-POST /api/products
-PUT  /api/products/{id}
-```
-
-Body:
+Respuesta (200):
 
 ```json
+[
+  {
+    "id": 1,
+    "sku": "SKU-TEST-001",
+    "name": "Mouse Inalambrico Test",
+    "description": "...",
+    "category": "Accesorios",
+    "unitPrice": 12990.00,
+    "stock": 25,
+    "active": true,
+    "createdAt": "2026-06-19T01:48:57.422038Z",
+    "updatedAt": "2026-06-19T01:48:57.422038Z"
+  }
+]
+```
+
+### 5.2. Obtener un producto por ID
+
+```http
+GET http://localhost:8080/{tenant}/api/products/{id}
+Authorization: Bearer <token>
+```
+
+### 5.3. Crear producto
+
+```http
+POST http://localhost:8080/{tenant}/api/products
+Authorization: Bearer <token>
+Content-Type: application/json
+
 {
   "sku": "SKU-001",
-  "name": "Wireless Mouse",
-  "description": "Ergonomic wireless mouse",
-  "category": "Accessories",
+  "name": "Mouse Inalambrico",
+  "description": "Mouse ergonómico",
+  "category": "Accesorios",
   "unitPrice": 12990,
   "stock": 25
 }
 ```
 
-Campos requeridos:
+Respuesta exitosa: **201 Created**, con el producto creado (incluye `id`).
 
-```text
-sku
-name
-category
-unitPrice
-stock
-```
+**Validaciones del body a tener en cuenta en el formulario del frontend:**
 
-Reglas de validacion:
+| Campo | Regla |
+|---|---|
+| `sku` | obligatorio, máx. 80 caracteres |
+| `name` | obligatorio, máx. 160 caracteres |
+| `description` | opcional, máx. 500 caracteres |
+| `category` | obligatorio, máx. 100 caracteres |
+| `unitPrice` | obligatorio, debe ser **mayor a 0** (no acepta 0 ni negativos) |
+| `stock` | obligatorio, entero, **mínimo 0** |
 
-```text
-sku: requerido, maximo 80 caracteres
-name: requerido, maximo 160 caracteres
-description: opcional, maximo 500 caracteres
-category: requerido, maximo 100 caracteres
-unitPrice: requerido, mayor que 0
-stock: requerido, minimo 0
-```
+Si el formulario manda algo fuera de estas reglas, el backend responde 400.
 
-### Request Para Actualizar Stock
-
-Se usa en:
+### 5.4. Actualizar producto completo
 
 ```http
-PATCH /api/products/{id}/stock
+PUT http://localhost:8080/{tenant}/api/products/{id}
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ ... mismo formato que crear ... }
 ```
 
-Body:
+### 5.5. Actualizar solo el stock
 
-```json
+```http
+PATCH http://localhost:8080/{tenant}/api/products/{id}/stock
+Authorization: Bearer <token>
+Content-Type: application/json
+
 {
   "stock": 40
 }
 ```
 
-### Response De Producto
-
-```json
-{
-  "id": 1,
-  "sku": "SKU-001",
-  "name": "Wireless Mouse",
-  "description": "Ergonomic wireless mouse",
-  "category": "Accessories",
-  "unitPrice": 12990,
-  "stock": 25,
-  "active": true,
-  "createdAt": "2026-05-18T19:00:00-04:00",
-  "updatedAt": "2026-05-18T19:00:00-04:00"
-}
-```
-
-## Errores Esperados
-
-### Login Incorrecto
+### 5.6. Eliminar producto
 
 ```http
-401 Unauthorized
+DELETE http://localhost:8080/{tenant}/api/products/{id}
+Authorization: Bearer <token>
 ```
 
-Significa que el usuario o la contrasena son incorrectos.
+Respuesta exitosa: **204 No Content** (sin body).
 
-### Token Faltante O Invalido
+## 6. Manejo de errores que el frontend debe contemplar
 
-```http
-401 Unauthorized
+| Código | Cuándo ocurre | Qué mostrar en UI |
+|---|---|---|
+| 400 | Datos del formulario inválidos | Mensaje de validación (revisar `validationErrors` si viene) |
+| 401 | Token ausente, expirado o inválido | Redirigir a login |
+| 403 | El tenant del token no coincide con el de la URL — **no debería pasar en uso normal del frontend**, pero indica un bug si aparece (ej. token viejo de otro tenant guardado en el store) | Forzar logout y re-login |
+| 404 | Producto no encontrado | Mensaje "producto no existe" |
+| 409 | Conflicto (ej. username duplicado en registro) | Mensaje específico del campo |
+
+El 403 en particular es la prueba de que el aislamiento multi-tenant
+funciona — si el frontend cambia de tenant sin limpiar el token viejo,
+el backend lo va a bloquear correctamente. Vale la pena que el store de
+autenticación limpie el token completo al cambiar de tenant/cuenta.
+
+## 7. Checklist rápido para la primera conexión
+
+- [ ] Confirmar que CORS está habilitado en el BFF para el puerto de Vite
+- [ ] Implementar el login y guardar `token` + `tenant` en el store
+- [ ] Armar un wrapper de fetch que agregue automáticamente
+      `Authorization: Bearer <token>` en cada llamada autenticada
+- [ ] Construir las URLs con el tenant guardado: `` `${BFF_URL}/${tenant}/api/...` ``
+- [ ] Probar el flujo: login → listar productos (vacío) → crear producto →
+      listar de nuevo (debe aparecer)
+- [ ] Verificar que al expirar o invalidar el token, la UI redirige a login
+      en vez de mostrar pantallas rotas
+
+## 8. Variable de entorno sugerida para el frontend
+
+En vez de hardcodear `http://localhost:8080` en el código, usar una env var
+de Vite:
+
+```
+# .env
+VITE_BFF_URL=http://localhost:8080
 ```
 
-Significa que el frontend no envio token, el token esta mal formado o el token expiro.
-
-En este caso, el frontend deberia cerrar sesion localmente y volver al login.
-
-### Error De Validacion
-
-```http
-400 Bad Request
+```javascript
+const BFF_URL = import.meta.env.VITE_BFF_URL;
 ```
 
-Ejemplo:
-
-```json
-{
-  "timestamp": "2026-05-18T19:00:00-04:00",
-  "status": 400,
-  "error": "Bad Request",
-  "message": "Validation failed",
-  "path": "/api/products",
-  "validationErrors": {
-    "name": "must not be blank",
-    "stock": "must be greater than or equal to 0"
-  }
-}
-```
-
-### SKU Duplicado
-
-```http
-409 Conflict
-```
-
-Significa que ya existe un producto con ese `sku`.
-
-### Producto No Encontrado
-
-```http
-404 Not Found
-```
-
-Significa que no existe un producto con el `id` solicitado.
-
-## Como Funciona El Backend
-
-El BFF es el unico backend que debe conocer el frontend.
-
-El BFF cumple dos responsabilidades principales:
-
-- Autenticacion: recibe credenciales y genera tokens JWT.
-- Gateway/API frontend: recibe las solicitudes del frontend y las envia al microservicio correspondiente.
-
-En esta etapa, el microservicio disponible es `inventory-service`.
-
-`inventory-service` es responsable de:
-
-- manejar productos;
-- manejar stock;
-- validar datos de inventario;
-- guardar datos en PostgreSQL;
-- responder al BFF.
-
-El frontend no necesita saber donde esta corriendo `inventory-service`. Si esa URL cambia, solo se cambia la configuracion del BFF.
-
-## Flujo Actual Del Login
-
-```text
-Frontend
-  POST /api/auth/login
-    -> BFF valida username/password
-    -> BFF genera JWT
-    -> BFF responde token al frontend
-```
-
-## Flujo Actual De Productos
-
-```text
-Frontend
-  GET /api/products con Bearer token
-    -> BFF valida JWT
-    -> BFF reenvia la solicitud a inventory-service con el mismo JWT
-    -> inventory-service valida JWT
-    -> inventory-service responde productos
-    -> BFF responde al frontend
-```
-
-## Notas Importantes
-
-- El frontend debe llamar siempre al BFF.
-- El frontend no debe llamar directamente a `inventory-service`.
-- El token se obtiene con `/api/auth/login`.
-- El token se envia con `Authorization: Bearer <token>`.
-- Si una solicitud responde `401`, probablemente hay que volver al login.
-- El BFF permite CORS desde `http://localhost:5173` y `http://localhost:4173`.
-- El backend completo se puede levantar con `docker compose up --build` desde `Smart-Logix-Back`.
-- La base de datos local del backend es PostgreSQL. H2 se usa solo para tests del backend.
-- `signup` todavia no esta implementado.
-- Por ahora se usa un usuario de prueba configurable:
-
-```text
-username: admin
-password: admin123
-```
+Así, si más adelante se corre todo en Docker con nombres de servicio en vez
+de `localhost`, solo se cambia esta variable.
