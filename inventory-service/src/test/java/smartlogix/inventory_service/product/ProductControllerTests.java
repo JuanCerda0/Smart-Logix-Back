@@ -13,8 +13,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -106,6 +108,111 @@ class ProductControllerTests {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.stock").value(18));
+    }
+
+    @Test
+    void shouldReturnNotFoundForMissingProduct() throws Exception {
+        mockMvc.perform(get("/products/{id}", 99999)
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldUpdateProductCompletely() throws Exception {
+        productRepository.deleteAll();
+        Product product = productRepository.save(new Product(
+                "SKU-UPDATE-001",
+                "Original Product",
+                "Original description",
+                "Testing",
+                java.math.BigDecimal.valueOf(14990),
+                5));
+
+        mockMvc.perform(put("/products/{id}", product.getId())
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sku": "SKU-UPDATE-002",
+                                  "name": "Updated Product",
+                                  "description": "Updated description",
+                                  "category": "Updated",
+                                  "unitPrice": 25990,
+                                  "stock": 20
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sku").value("SKU-UPDATE-002"))
+                .andExpect(jsonPath("$.name").value("Updated Product"))
+                .andExpect(jsonPath("$.category").value("Updated"))
+                .andExpect(jsonPath("$.unitPrice").value(25990))
+                .andExpect(jsonPath("$.stock").value(20));
+    }
+
+    @Test
+    void shouldDeleteProduct() throws Exception {
+        productRepository.deleteAll();
+        Product product = productRepository.save(new Product(
+                "SKU-DELETE-001",
+                "Delete Product",
+                "Product used for delete test",
+                "Testing",
+                java.math.BigDecimal.valueOf(14990),
+                5));
+
+        mockMvc.perform(delete("/products/{id}", product.getId())
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1"))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/products/{id}", product.getId())
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldRejectInvalidProductRequest() throws Exception {
+        mockMvc.perform(post("/products")
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "sku": "",
+                                  "name": "",
+                                  "description": "Invalid product",
+                                  "category": "",
+                                  "unitPrice": 0,
+                                  "stock": -1
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void shouldRejectNegativeStockUpdate() throws Exception {
+        productRepository.deleteAll();
+        Product product = productRepository.save(new Product(
+                "SKU-STOCK-NEG-001",
+                "Stock Product",
+                "Product used for stock validation test",
+                "Testing",
+                java.math.BigDecimal.valueOf(14990),
+                5));
+
+        mockMvc.perform(patch("/products/{id}/stock", product.getId())
+                        .with(jwt())
+                        .header(TENANT_HEADER, "empresa1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "stock": -1
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
