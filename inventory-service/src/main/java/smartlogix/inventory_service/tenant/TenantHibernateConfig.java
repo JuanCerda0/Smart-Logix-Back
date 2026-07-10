@@ -20,6 +20,7 @@ public class TenantHibernateConfig {
             properties.put(AvailableSettings.MULTI_TENANT_CONNECTION_PROVIDER, connectionProvider);
             properties.put(AvailableSettings.MULTI_TENANT_IDENTIFIER_RESOLVER, currentTenantResolver);
             properties.put(AvailableSettings.MULTI_TENANT_SCHEMA_MAPPER, tenantSchemaMapper);
+            properties.put(AvailableSettings.MULTI_TENANT, "SCHEMA");
         };
     }
 }
