@@ -34,6 +34,7 @@ application-*.local.yml
 .project
 .classpath
 .settings/
+AGENTS.md
 
 # OS files
 .DS_Store
